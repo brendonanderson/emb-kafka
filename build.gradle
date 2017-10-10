@@ -1,0 +1,93 @@
+import com.wiredforcode.gradle.spawn.*
+import org.springframework.kafka.test.rule.KafkaEmbedded
+
+
+buildscript {
+	ext {
+        groovyVersion = '2.4.9'
+        httpBuilderVersion = '0.7'
+        logbackVersion = '1.2.3'
+        spawnVersion = '0.6.0'
+        spockVersion = '1.1-groovy-2.4'
+		springBootVersion = '1.5.7.RELEASE'
+        springKafkaVersion = '1.2.2.RELEASE'
+	}
+	repositories {
+		mavenCentral()
+        maven { url 'http://dl.bintray.com/vermeulen-mp/gradle-plugins' }
+	}
+	dependencies {
+		classpath("org.springframework.boot:spring-boot-gradle-plugin:${springBootVersion}")
+        classpath "com.wiredforcode:gradle-spawn-plugin:${spawnVersion}"
+        classpath "org.springframework.kafka:spring-kafka-test:${springKafkaVersion}"
+	}
+}
+
+apply plugin: 'groovy'
+apply plugin: 'eclipse'
+apply plugin: 'org.springframework.boot'
+apply plugin: 'com.wiredforcode.spawn'
+
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = 1.8
+
+repositories {
+	mavenCentral()
+}
+
+sourceSets {
+    functionalTest {
+        compileClasspath = sourceSets.main.output + configurations.testRuntime
+        runtimeClasspath = output + sourceSets.main.output + configurations.testRuntime
+        groovy {
+            srcDir 'src/functionalTest/groovy'
+        }
+    }
+}
+
+KafkaEmbedded kafkaEmbedded
+int bootPort
+task startServer(type: SpawnProcessTask) {
+    doFirst {
+        kafkaEmbedded = new KafkaEmbedded(1, true, 1, 'output-topic')
+        kafkaEmbedded.before()
+        bootPort = availablePort()
+        command "java -Dserver.port=${bootPort} -Dspring.kafka.producer.bootstrap-servers=${kafkaEmbedded.getBrokersAsString()} -Dspring.kafka.consumer.group-id=func-test -jar ${projectDir}/build/libs/emb-kafka-${version}.jar"
+        ready 'Started EmbKafkaApplication'
+    }
+}
+
+task stopServer(type: KillProcessTask) {
+    doFirst {
+        kafkaEmbedded?.after()
+    }
+}
+
+task functionalTest(type: Test, dependsOn: [assemble, startServer]) {
+    testClassesDir = sourceSets.functionalTest.output.classesDir
+    classpath = sourceSets.functionalTest.runtimeClasspath
+    doFirst {
+        systemProperty('spring.kafka.producer.bootstrap-servers', kafkaEmbedded.getBrokersAsString())
+        systemProperty('server.port', bootPort)
+    }
+}
+functionalTest.finalizedBy('stopServer')
+
+Integer availablePort() {
+    ServerSocket server = new ServerSocket(0)
+    Integer randomAvailablePort = server.localPort
+    server.close()
+    return randomAvailablePort
+}
+
+dependencies {
+    compile group: 'org.codehaus.groovy', name: 'groovy-all', version: groovyVersion
+    compile group: 'org.springframework.kafka', name: 'spring-kafka', version: springKafkaVersion
+	compile group: 'org.springframework.kafka', name: 'spring-kafka-test', version: springKafkaVersion
+    compile group: 'org.springframework.boot', name: 'spring-boot-starter-web', version: springBootVersion
+    compile group: 'ch.qos.logback', name: 'logback-classic', version: logbackVersion
+
+    testCompile group: 'org.springframework.boot', name: 'spring-boot-starter-test', version: springBootVersion
+    testCompile group: 'org.spockframework', name: 'spock-core', version: spockVersion
+    testCompile group: 'org.codehaus.groovy.modules.http-builder', name: 'http-builder', version: httpBuilderVersion
+}
